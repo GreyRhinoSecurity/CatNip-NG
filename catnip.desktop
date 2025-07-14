@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=CatNip
+Exec=catnip
+Type=Application
+Terminal=true
+Categories=Utility;
