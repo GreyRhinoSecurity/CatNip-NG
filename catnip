@@ -1,2 +1,465 @@
 #!/bin/bash
-# [placeholder for final CatNip script, insert real script here]
+
+# === CatNip v4.7 ===
+# [Dashboard always populated: hashcat --show fix, all previous features retained]
+
+VERSION="4.7"
+MODE=1000
+
+RED='\033[0;31m'
+GRN='\033[0;32m'
+YEL='\033[1;33m'
+BLU='\033[1;34m'
+MAG='\033[1;35m'
+CYN='\033[1;36m'
+RST='\033[0m'
+
+clear
+
+# === Session Output Folder Setup ===
+SESSION_TS=$(date '+%Y%m%d_%H%M%S')
+LOOT_DIR="loot/$SESSION_TS"
+mkdir -p "$LOOT_DIR"
+
+OUTFILE="$LOOT_DIR/cracked_ntlm.txt"
+JOHNOUT="$LOOT_DIR/cracked_john.txt"
+DASHBOARD_HTML="$LOOT_DIR/catnip_dashboard.html"
+WORDLIST_OUT="$LOOT_DIR/catnip_custom_wordlist.txt"
+CEWLFILE="$LOOT_DIR/catnip_cewl.txt"
+HTMLFILE="$LOOT_DIR/cewl_page.html"
+HASH_USER_MAP="$LOOT_DIR/hash_user_map.txt"
+NTLM_TEST_HASHES="./ntlm_test_hashes.txt"   # For built-in test hashes
+
+echo -e "${MAG}"
+echo "     /\\_/\\    CatNip Cracker v$VERSION"
+echo "    ( o.o )   by GreyRhinoSecurity 🐾"
+echo "     > ^ <    smart wordlists + cracking + dashboard"
+echo -e "${RST}"
+echo -e "${MAG}╔════════════════════════════════════════════════════════════╗"
+echo -e "║ ${BLU}CatNip - Terminal Edition${MAG} | ${YEL}v$VERSION${MAG} | Full stack cracking suite ║"
+echo -e "╚════════════════════════════════════════════════════════════╝${RST}"
+
+echo -e "\n🎛️ ${CYN}Main Menu:${RST}"
+echo "  [1] Crack NTLM Hashes 🔓"
+echo "  [2] Run Engine Benchmarks ⚡"
+echo "  [3] Generate Smart Wordlist (CEWL + rules) 🧠"
+read -p "🔢 Choice: " MAIN_CHOICE
+
+if [[ "$MAIN_CHOICE" == "2" ]]; then
+  echo -e "\n⚙️  Running ${YEL}Hashcat Benchmark${RST}..."
+  hashcat -b -m $MODE
+  echo -e "\n⚙️  Running ${YEL}John Benchmark${RST}..."
+  john --test --format=NT
+  echo -e "\n${GRN}✅ Benchmark complete.${RST}"
+  exit 0
+fi
+
+if [[ "$MAIN_CHOICE" == "3" ]]; then
+  echo -e "\n🧠 ${MAG}CatNip Wordlist Generator${RST}"
+  read -e -p "👤 Username: " USERNAME
+  read -e -p "📏 Min password length (e.g., 6): " MINLEN
+  read -e -p "📏 Max password length (e.g., 16): " MAXLEN
+  read -e -p "🔑 Keywords (comma-separated): " KEYWORDS
+  read -e -p "📅 Year range (e.g., 2020-2024): " YEAR_RANGE
+  read -e -p "🌐 Target URL for CEWL (optional): " TARGET_URL
+
+  > "$WORDLIST_OUT"
+  echo "$USERNAME" >> "$WORDLIST_OUT"
+  echo "${USERNAME}123" >> "$WORDLIST_OUT"
+  echo "${USERNAME}@123" >> "$WORDLIST_OUT"
+  echo "${USERNAME^}" >> "$WORDLIST_OUT"
+  echo "${USERNAME^}123" >> "$WORDLIST_OUT"
+  echo "$(echo $USERNAME | sed 's/e/3/g; s/i/1/g; s/o/0/g')" >> "$WORDLIST_OUT"
+
+  IFS=',' read -ra KW <<< "$KEYWORDS"
+  for word in "${KW[@]}"; do
+    echo "$word" >> "$WORDLIST_OUT"
+    echo "${USERNAME}${word}" >> "$WORDLIST_OUT"
+    echo "${word}${USERNAME}" >> "$WORDLIST_OUT"
+  done
+
+  if [[ "$YEAR_RANGE" =~ ^[0-9]{4}-[0-9]{4}$ ]]; then
+    START=$(echo $YEAR_RANGE | cut -d'-' -f1)
+    END=$(echo $YEAR_RANGE | cut -d'-' -f2)
+    for (( y=$START; y<=$END; y++ )); do
+      echo "${USERNAME}${y}" >> "$WORDLIST_OUT"
+      for word in "${KW[@]}"; do
+        echo "${word}${y}" >> "$WORDLIST_OUT"
+        echo "${USERNAME}${word}${y}" >> "$WORDLIST_OUT"
+      done
+    done
+  fi
+
+  if [[ -n "$TARGET_URL" ]]; then
+    echo -e "\n🌐 Downloading $TARGET_URL for CEWL..."
+    wget -q "$TARGET_URL" -O "$HTMLFILE"
+    if [[ -s "$HTMLFILE" ]]; then
+      if command -v cewl >/dev/null; then
+        cewl -w "$CEWLFILE" "$HTMLFILE" --offline
+        cat "$CEWLFILE" >> "$WORDLIST_OUT"
+        echo -e "${GRN}✔ CEWL words added from offline HTML${RST}"
+      else
+        echo -e "${RED}❌ CEWL not found. Run: sudo apt install cewl${RST}"
+      fi
+    else
+      echo -e "${RED}❌ Failed to fetch or save HTML.${RST}"
+    fi
+  fi
+
+  awk -v min=$MINLEN -v max=$MAXLEN 'length($0)>=min && length($0)<=max' "$WORDLIST_OUT" | sort -u > tmp_filtered.txt && mv tmp_filtered.txt "$WORDLIST_OUT"
+  echo -e "${GRN}✅ Wordlist saved: $WORDLIST_OUT${RST}"
+
+  read -p "🔁 Use this wordlist to start cracking now? (y/n): " NEXT
+  [[ "$NEXT" =~ ^[Yy]$ ]] && WORDLIST="$WORDLIST_OUT"
+fi
+
+[[ -z "$WORDLIST" ]] && {
+  echo -e "
+📚 ${CYN}Select a wordlist or enter custom path:${RST}"
+  echo "  [1] /usr/share/wordlists/rockyou.txt"
+  echo "  [2] /usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt"
+  echo "  [3] $WORDLIST_OUT (generated)"
+  echo "  [C] Custom path"
+  read -p "🔢 Choice: " WL_CHOICE
+
+  case "$WL_CHOICE" in
+    1) WORDLIST="/usr/share/wordlists/rockyou.txt" ;;
+    2) WORDLIST="/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt" ;;
+    3) WORDLIST="$WORDLIST_OUT" ;;
+    C|c) read -e -p "📂 Enter full path to wordlist: " WORDLIST ;;
+    *) echo -e "${RED}❌ Invalid choice.${RST}" && exit 1 ;;
+  esac
+}
+WORDLIST=${WORDLIST:-/usr/share/wordlists/rockyou.txt}
+
+# ========== NTLM hash selection, now with quick test option =============
+echo -e "\n🔑 ${CYN}Select NTLM hash file input method:${RST}"
+echo "  [1] Enter path to your NTLM hash file"
+echo "  [2] Use built-in NTLM test hashes (${NTLM_TEST_HASHES})"
+echo "  [3] Run built-in CatNip NTLM quick test (demo)"
+read -p "🔢 Choice: " HASH_INPUT_CHOICE
+
+if [[ "$HASH_INPUT_CHOICE" == "3" ]]; then
+  cat > "$LOOT_DIR/ntlm_quicktest_hashes.txt" <<EOF
+5f4dcc3b5aa765d61d8327deb882cf99
+32ed87bdb5fdc5e9cba88547376818d4
+25d55ad283aa400af464c76d713c07ad
+8cb2237d0679ca88db6464eac60da963
+8846f7eaee8fb117ad06bdd830b7586c
+EOF
+
+  cat > "$LOOT_DIR/ntlm_quicktest_words.txt" <<EOF
+password
+123456
+12345678
+12345
+password1
+admin
+guest
+EOF
+
+  HASH_FILE="$LOOT_DIR/ntlm_quicktest_hashes.txt"
+  WORDLIST="$LOOT_DIR/ntlm_quicktest_words.txt"
+  echo -e "${GRN}[!] CatNip NTLM quick test enabled: using 5 trivial test hashes and wordlist.${RST}"
+  {
+    echo "user1:5f4dcc3b5aa765d61d8327deb882cf99"
+    echo "user2:32ed87bdb5fdc5e9cba88547376818d4"
+    echo "user3:25d55ad283aa400af464c76d713c07ad"
+    echo "user4:8cb2237d0679ca88db6464eac60da963"
+    echo "user5:8846f7eaee8fb117ad06bdd830b7586c"
+  } > "$HASH_USER_MAP"
+elif [[ "$HASH_INPUT_CHOICE" == "2" ]]; then
+  HASH_FILE="$NTLM_TEST_HASHES"
+  if [[ ! -f "$HASH_FILE" ]]; then
+    echo -e "${RED}❌ NTLM test hashes not found at $NTLM_TEST_HASHES${RST}"
+    exit 1
+  fi
+  echo -e "${GRN}✔ Using built-in NTLM test hashes: $HASH_FILE${RST}"
+else
+  read -e -p "📁 Enter path to your NTLM hash file: " HASH_FILE
+  if [[ ! -f "$HASH_FILE" ]]; then
+    echo -e "${RED}❌ Hash file not found.${RST}"
+    exit 1
+  fi
+fi
+[[ ! -f "$WORDLIST" ]] && echo -e "${RED}❌ Wordlist not found.${RST}" && exit 1
+
+# === Robust hash extraction: works for colon-delimited and flat hash files ===
+if grep -q ':' "$HASH_FILE"; then
+  awk -F: 'length($4)==32 && $4 ~ /^[0-9a-fA-F]{32}$/ {print tolower($4)}' "$HASH_FILE" > "$LOOT_DIR/hashes.ntlm"
+  cut -d ':' -f 1,4 "$HASH_FILE" | grep -v '::' > "$HASH_USER_MAP"
+  cut -d ':' -f 1,4 "$HASH_FILE" > "$LOOT_DIR/john_hashes.txt"
+else
+  awk 'length($1)==32 && $1 ~ /^[0-9a-fA-F]{32}$/ {print tolower($1)}' "$HASH_FILE" > "$LOOT_DIR/hashes.ntlm"
+  awk '{print "user"NR":"$1}' "$HASH_FILE" > "$HASH_USER_MAP"
+  awk '{print "user"NR":"$1}' "$HASH_FILE" > "$LOOT_DIR/john_hashes.txt"
+fi
+
+echo -e "\n📏 Select Hashcat rule set:"
+RULE_DIR="/usr/share/hashcat/rules"
+RULES=($(find "$RULE_DIR" -maxdepth 1 -name "*.rule" | sort))
+echo "  [0] No rule (straight wordlist, best for quick test)"
+for i in "${!RULES[@]}"; do echo "  [$((i+1))] $(basename "${RULES[$i]}")"; done
+echo "  [C] Custom rule path"
+read -p "🎯 Choice: " RULE_CHOICE
+
+if [[ "$RULE_CHOICE" == "0" ]]; then
+  RULE_SELECTED=""
+else
+  idx=$((RULE_CHOICE-1))
+  [[ "$RULE_CHOICE" =~ ^[Cc]$ ]] && read -e -p "📂 Enter path: " CUSTOM_RULE && RULE_SELECTED="$CUSTOM_RULE" || RULE_SELECTED="${RULES[$idx]}"
+  [[ ! -f "$RULE_SELECTED" ]] && [[ -n "$RULE_SELECTED" ]] && echo -e "${RED}❌ Rule file not found.${RST}" && exit 1
+fi
+
+echo -e "\n⚙️ Choose engine:"
+echo "  [1] Hashcat 🐱"
+echo "  [2] John 🔪"
+echo "  [3] Both 💣"
+read -p "🔢 Engine: " ENGINE_CHOICE
+
+GPU_FLAGS=""
+[[ "$ENGINE_CHOICE" =~ [13] ]] && read -p "🧠 Enable GPU tuning? (y/n): " GPU_OPT && [[ "$GPU_OPT" =~ ^[Yy]$ ]] && GPU_FLAGS="--opencl-device-types 1 --force"
+
+total_hashes=$(wc -l < "$LOOT_DIR/hashes.ntlm")
+
+# === GPU Cleanup Mode Selection (only if using Hashcat) ===
+GPU_TYPE=""
+if [[ "$ENGINE_CHOICE" =~ [13] ]]; then
+  echo -e "${CYN}Select GPU type for cleanup on script exit:${RST}"
+  echo "  [1] NVIDIA"
+  echo "  [2] AMD"
+  echo "  [3] None"
+  read -p "🔢 GPU Type: " GPU_TYPE_CHOICE
+
+  case "$GPU_TYPE_CHOICE" in
+    1) GPU_TYPE="NVIDIA" ;;
+    2) GPU_TYPE="AMD" ;;
+    *) GPU_TYPE="NONE" ;;
+  esac
+
+  cleanup_gpu() {
+    if pgrep -x hashcat >/dev/null; then
+      echo -e "${YEL}[*] Killing all hashcat instances...${RST}"
+      pkill -x hashcat
+      sleep 2
+    fi
+    if [[ "$GPU_TYPE" == "NVIDIA" ]] && command -v nvidia-smi >/dev/null; then
+      echo -e "${YEL}[*] Forcing NVIDIA GPU reset (requires sudo)...${RST}"
+      sudo nvidia-smi --gpu-reset
+    fi
+    if [[ "$GPU_TYPE" == "AMD" ]]; then
+      echo -e "${YEL}[*] AMD GPU selected, hashcat processes killed (no full reset needed).${RST}"
+    fi
+  }
+  trap cleanup_gpu EXIT
+fi
+
+# === Hashcat Progress with Debugging ===
+if [[ "$ENGINE_CHOICE" =~ [13] ]]; then
+  echo -e "\n🐱 Running Hashcat with $(basename "$RULE_SELECTED")..."
+  HC_START=$(date +%s)
+  echo -e "${YEL}Total hashes to crack: $total_hashes${RST}"
+  if [[ -n "$RULE_SELECTED" ]]; then
+    echo -e "${YEL}Running: hashcat -m $MODE -a 0 $LOOT_DIR/hashes.ntlm $WORDLIST -r $RULE_SELECTED $GPU_FLAGS --status --status-timer=5${RST}"
+    hashcat -m $MODE -a 0 "$LOOT_DIR/hashes.ntlm" "$WORDLIST" -r "$RULE_SELECTED" $GPU_FLAGS --status --status-timer=5 | tee "$LOOT_DIR/hashcat_progress.txt" &
+  else
+    echo -e "${YEL}Running: hashcat -m $MODE -a 0 $LOOT_DIR/hashes.ntlm $WORDLIST $GPU_FLAGS --status --status-timer=5${RST}"
+    hashcat -m $MODE -a 0 "$LOOT_DIR/hashes.ntlm" "$WORDLIST" $GPU_FLAGS --status --status-timer=5 | tee "$LOOT_DIR/hashcat_progress.txt" &
+  fi
+  HCPID=$!
+  while kill -0 $HCPID 2>/dev/null; do
+    clear
+    echo -e "${MAG}╔═══════════ HASHCAT PROGRESS ═══════════╗${RST}"
+    tail -15 "$LOOT_DIR/hashcat_progress.txt"
+    echo -e "${MAG}╚════════════════════════════════════════╝${RST}"
+    sleep 5
+  done
+  wait $HCPID
+  HC_END=$(date +%s)
+  HC_TIME=$((HC_END - HC_START))
+  # --- ALWAYS run --show after, to get cracked hashes (even from potfile)
+  hashcat --show -m $MODE "$LOOT_DIR/hashes.ntlm" > "$OUTFILE"
+  hc_cracked=$(wc -l < "$OUTFILE" 2>/dev/null)
+  echo -e "${GRN}Hashcat finished in $HC_TIME seconds. $hc_cracked/$total_hashes cracked.${RST}"
+fi
+
+# === John Progress ===
+if [[ "$ENGINE_CHOICE" =~ [23] ]]; then
+  echo -e "\n🔪 Running John the Ripper..."
+  J_START=$(date +%s)
+  echo -e "${YEL}Total hashes to crack: $total_hashes${RST}"
+  echo -e "${CYN}Progress will update every 7 seconds. Ctrl+C to finish early (cracking continues in background).${RST}"
+  john --format=NT --wordlist="$WORDLIST" "$LOOT_DIR/john_hashes.txt" &
+  JPID=$!
+  while kill -0 $JPID 2>/dev/null; do
+    john --status 2>/dev/null
+    sleep 7
+  done
+  wait $JPID
+  J_END=$(date +%s)
+  J_TIME=$((J_END - J_START))
+  john --show --format=NT "$LOOT_DIR/john_hashes.txt" > "$JOHNOUT"
+  john_cracked=$(wc -l < "$JOHNOUT" 2>/dev/null)
+  echo -e "${GRN}John finished in $J_TIME seconds. $john_cracked/$total_hashes cracked.${RST}"
+  cat "$JOHNOUT"
+fi
+
+# === Progress Summary ===
+hc_cracked=$(wc -l < "$OUTFILE" 2>/dev/null)
+john_cracked=$(wc -l < "$JOHNOUT" 2>/dev/null)
+echo -e "\n${CYN}==== SUMMARY ====${RST}"
+echo -e "Total hashes: $total_hashes"
+echo -e "Hashcat cracked: $hc_cracked"
+echo -e "John cracked:    $john_cracked"
+
+# === Improved CatNip HTML Dashboard (always maps username/hash, supports all engine output) ===
+
+cat > "$DASHBOARD_HTML" <<EOF
+<html>
+<head>
+  <title>CatNip Cracked Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css"/>
+  <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.dataTables.min.css"/>
+  <style>
+    body { background: #181d23; color: #eee; font-family: sans-serif;}
+    h2 { color: #88c0d0; text-align:center;}
+    .dt-buttons {margin-bottom:8px;}
+    table.dataTable tbody tr { background-color: #232931;}
+    table.dataTable tbody tr:nth-child(even) { background-color: #191e25;}
+    th,td { font-size: 1em; }
+    .badge { border-radius:6px; padding:2px 8px; color:#fff; font-weight:bold; font-size:.95em;}
+    .jgood {background:#4eac6d;}
+    .hgood {background:#61aeee;}
+    .bad {background:#b03a48;}
+    .hash {font-family:monospace;font-size:.93em;color:#aaa;}
+    .user {font-weight:bold;}
+  </style>
+</head>
+<body>
+  <h2>🐾 CatNip Cracked Passwords Dashboard</h2>
+  <p align=center id="crack-summary" style="font-size:1.15em;"></p>
+  <table id="catnip" class="display stripe" style="width:96%;margin:0 auto;">
+    <thead>
+      <tr>
+        <th>User Name</th>
+        <th>NTLM Hash</th>
+        <th>Cracked Password</th>
+        <th>John</th>
+        <th>Hashcat</th>
+      </tr>
+    </thead>
+    <tbody>
+EOF
+
+# --- Robust Dashboard Mapping Logic ---
+declare -A HASH2USER
+while IFS=':' read -r user hash; do
+  [[ -n "$user" && -n "$hash" ]] && HASH2USER["$hash"]="$user"
+done < "$HASH_USER_MAP"
+
+declare -A JOHN_HASHES
+if [[ -s "$JOHNOUT" ]]; then
+  while IFS=':' read -r user pass hash; do
+    if [[ -n "$hash" ]]; then
+      [[ -n "$pass" ]] && JOHN_HASHES["$hash"]="$pass"
+    else
+      hash_lookup=$(awk -F: -v u="$user" '$1==u{print $2}' "$HASH_USER_MAP")
+      [[ -n "$pass" && -n "$hash_lookup" ]] && JOHN_HASHES["$hash_lookup"]="$pass"
+    fi
+  done < <(grep -v '^$' "$JOHNOUT")
+fi
+
+declare -A HC_HASHES
+if [[ -s "$OUTFILE" ]]; then
+  while IFS=':' read -r hash pass; do
+    [[ -n "$hash" && -n "$pass" ]] && HC_HASHES["$hash"]="$pass"
+  done < <(awk -F: '{print $1":"$2}' "$OUTFILE")
+fi
+
+cracked_count=0
+total_count=0
+
+while IFS=':' read -r user hash; do
+  [[ -z "$hash" || -z "$user" ]] && continue
+  pw="—"
+  johnbadge='<span class="badge bad">✘</span>'
+  hcbadge='<span class="badge bad">✘</span>'
+  john_cracked=0; hc_cracked=0
+  if [[ -n "${JOHN_HASHES[$hash]}" ]]; then
+    pw="${JOHN_HASHES[$hash]}"
+    johnbadge='<span class="badge jgood">✔</span>'
+    john_cracked=1
+  fi
+  if [[ -n "${HC_HASHES[$hash]}" ]]; then
+    pw="${HC_HASHES[$hash]}"
+    hcbadge='<span class="badge hgood">✔</span>'
+    hc_cracked=1
+  fi
+  [[ $john_cracked -eq 1 || $hc_cracked -eq 1 ]] && cracked_count=$((cracked_count+1))
+  total_count=$((total_count+1))
+  echo "<tr>
+    <td class=user>${user}</td>
+    <td class=hash>${hash}</td>
+    <td>${pw}</td>
+    <td align=center>${johnbadge}</td>
+    <td align=center>${hcbadge}</td>
+  </tr>" >> "$DASHBOARD_HTML"
+done < "$HASH_USER_MAP"
+
+if [[ $total_count -eq 0 ]]; then
+  echo "<tr><td colspan=5 align=center><i>No hashes/users found.</i></td></tr>" >> "$DASHBOARD_HTML"
+fi
+
+cat >> "$DASHBOARD_HTML" <<EOF
+    </tbody>
+  </table>
+  <p align=center style='color:#999;font-size:.9em'>Generated: $(date)</p>
+  <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/buttons/2.4.2/js/dataTables.buttons.min.js"></script>
+  <script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.html5.min.js"></script>
+  <script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.print.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.3/jszip.min.js"></script>
+  <script>
+    \$(document).ready(function() {
+      \$('#catnip').DataTable({
+        dom: 'Bfrtip',
+        buttons: [
+          'copyHtml5','csvHtml5','excelHtml5','print'
+        ],
+        "order": [[ 0, "asc" ]]
+      });
+      document.getElementById('crack-summary').innerHTML =
+        "<b>Cracked $cracked_count of $total_count hashes</b>";
+      document.getElementById('crack-count').innerHTML =
+        "<b>"+(\$('#catnip tbody tr').length)+" credentials listed.</b>";
+    });
+  </script>
+</body>
+</html>
+EOF
+
+echo -e "${GRN}📊 HTML dashboard updated: ${CYN}$DASHBOARD_HTML${RST}"
+echo -e "${GRN}Session results are in: ${CYN}$LOOT_DIR${RST}"
+
+if command -v xdg-open >/dev/null; then
+  xdg-open "$DASHBOARD_HTML" &
+fi
+
+echo -e "
+${MAG}✨ CatNip v$VERSION complete.${RST}"
+
+# === MIT License Notice ===
+echo -e "
+${CYN}CatNip is licensed under the MIT License:${RST}"
+echo -e "
+Copyright (c) $(date +%Y) GreyRhinoSecurity"
+echo -e "
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the \"Software\"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:"
+echo -e "
+THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND."
